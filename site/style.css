@@ -21,6 +21,3 @@ body { font-family: 'Public Sans', sans-serif; color: #0f1b2d; min-height: 100vh
 .port-row:hover, .board-row:hover { background: #fafbfc; }
 
 .source-link:hover { border-color: #0e7490; background: #f7fafc; }
-
-.search-row:hover { background: #f7fafc; }
-.search-row:last-child { border-bottom: none !important; }

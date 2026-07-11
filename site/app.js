@@ -5,9 +5,7 @@
   const SHOW_JSON = true;
   const DEFAULT_VIEW = 'map';
 
-  // mapMode: null = port view (all ships in the port area); { type:'ship',
-  // imo|mmsi, name } = single-ship tracking
-  const state = { selectedId: 'SGSIN', view: null, mapMode: null };
+  const state = { selectedId: 'SGSIN', view: null };
 
   const LS_KEY = 'pcm_settings_v1';
   const DEFAULT_MODEL = 'google/gemini-3-flash-preview';
@@ -357,119 +355,22 @@
     </div>`;
   }
 
-  function mapSrc(sel) {
-    // Same iframe VesselFinder's official aismap.js embed script generates.
-    const base = 'https://www.vesselfinder.com/aismap?width=100%25&height=460';
-    const m = state.mapMode;
-    if (m && m.type === 'ship') {
-      const idParam = m.imo ? `imo=${encodeURIComponent(m.imo)}` : `mmsi=${encodeURIComponent(m.mmsi)}`;
-      return `${base}&zoom=undefined&lat=undefined&lon=undefined&names=true&${idParam}&track=true&fleet=false&fleet_name=false`;
-    }
-    // all ships in the port area — the plain area embed: center + zoom 8
-    return `${base}&zoom=8&lat=${sel.lat}&lon=${sel.lng}&names=false&track=false&fleet=false&fleet_name=false`;
-  }
-
   function renderMap(d) {
     const sel = d.sel;
-    const m = state.mapMode;
 
-    const title = m && m.type === 'ship' ? `Tracking ${esc(m.name)}`
-      : `All ships around ${esc(sel.name)}`;
-
-    const trackBar = m ? `
-      <div style="margin:12px 16px 0;display:flex;align-items:center;gap:9px;background:#f0f7fa;border:1px solid #cde3ee;border-radius:9px;padding:8px 12px;font-size:12.5px;color:#0f1b2d;">
-        <span style="font-weight:600;">⛴ ${esc(m.name)}</span>
-        <span style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#7a8593;">${(m.imo ? 'IMO ' + esc(m.imo) : 'MMSI ' + esc(m.mmsi))} · 24h track shown</span>
-        <button id="clearTrack" title="Back to port view" style="margin-left:auto;border:none;background:transparent;color:#0e7490;font-weight:700;font-size:13px;cursor:pointer;">✕ port view</button>
-      </div>` : '';
+    // Same iframe VesselFinder's official aismap.js embed script generates —
+    // all ships in the port area: center on the port, zoom 8.
+    const src = `https://www.vesselfinder.com/aismap?width=100%25&height=460&zoom=8&lat=${sel.lat}&lon=${sel.lng}&names=false&track=false&fleet=false&fleet_name=false`;
 
     return `
       <div style="padding:15px 18px 12px;border-bottom:1px solid #eef1f4;display:flex;justify-content:space-between;align-items:center;gap:10px;">
-        <span style="font-family:'Schibsted Grotesk',sans-serif;font-weight:600;font-size:14px;">${title}</span>
+        <span style="font-family:'Schibsted Grotesk',sans-serif;font-weight:600;font-size:14px;">All ships around ${esc(sel.name)}</span>
         <span style="font-size:11px;color:#9aa3ae;font-family:'JetBrains Mono',monospace;">VESSELFINDER</span>
       </div>
-      <div style="padding:12px 16px 0;position:relative;">
-        <input id="shipSearch" type="text" autocomplete="off" placeholder="Track a ship near ${esc(sel.name)} — name, IMO or MMSI…"
-          style="width:100%;padding:9px 12px;border:1px solid #dde2e8;border-radius:9px;font-family:'Public Sans',sans-serif;font-size:13px;color:#0f1b2d;background:#fff;outline-color:${d.accent};">
-        <div id="shipSearchResults" style="display:none;position:absolute;left:16px;right:16px;top:calc(100% + 4px);background:#fff;border:1px solid #dde2e8;border-radius:9px;box-shadow:0 10px 28px rgba(15,27,45,0.14);z-index:100;overflow:hidden;max-height:280px;overflow-y:auto;"></div>
-      </div>
-      ${trackBar}
       <div style="height:460px;margin:13px 16px 0;border-radius:10px;overflow:hidden;border:1px solid #e1e7ee;background:#e7eef4;">
-        <iframe title="VesselFinder live AIS map" width="100%" height="460" frameborder="0" style="border:0;display:block;" src="${mapSrc(sel)}"></iframe>
+        <iframe title="VesselFinder live AIS map — ${esc(sel.name)}" width="100%" height="460" frameborder="0" style="border:0;display:block;" src="${src}"></iframe>
       </div>
-      <div style="padding:10px 18px 16px;font-size:11px;color:#9aa3ae;font-family:'JetBrains Mono',monospace;">Live vessel positions © VesselFinder · click a port to see all ships in its area · search a ship to track it</div>`;
-  }
-
-  // The search dropdown updates its own DOM instead of calling render() —
-  // a full re-render on every keystroke would destroy the input's focus.
-  // Ship name lookups go through /api/ships (VesselFinder public search),
-  // filtered server-side to ships near the selected port.
-  function bindShipSearch(sel) {
-    const input = document.getElementById('shipSearch');
-    const results = document.getElementById('shipSearchResults');
-    if (!input || !results) return;
-
-    let timer = null, seq = 0;
-
-    const rowStyle = 'display:flex;align-items:center;gap:9px;padding:9px 12px;cursor:pointer;border-bottom:1px solid #f2f4f7;';
-    const bindRows = () => {
-      results.querySelectorAll('[data-ship]').forEach(el => {
-        // mousedown, not click — it fires before the input's blur hides the list
-        el.addEventListener('mousedown', () => {
-          const ds = el.dataset;
-          state.mapMode = { type: 'ship', name: ds.name, imo: ds.imo || null, mmsi: ds.mmsi || null };
-          render();
-        });
-      });
-    };
-
-    const extraRows = q => {
-      let html = '';
-      if (/^\d{7}$/.test(q)) html += `<div class="search-row" data-ship data-name="IMO ${esc(q)}" data-imo="${esc(q)}" style="${rowStyle}"><span style="font-size:13px;font-weight:600;color:#0e7490;">Track IMO ${esc(q)}</span></div>`;
-      if (/^\d{9}$/.test(q)) html += `<div class="search-row" data-ship data-name="MMSI ${esc(q)}" data-mmsi="${esc(q)}" style="${rowStyle}"><span style="font-size:13px;font-weight:600;color:#0e7490;">Track MMSI ${esc(q)}</span></div>`;
-      return html;
-    };
-
-    const search = () => {
-      const q = input.value.trim();
-      if (q.length < 2) { results.style.display = 'none'; return; }
-      const mySeq = ++seq;
-      results.innerHTML = extraRows(q) + `<div style="padding:10px 12px;font-size:12.5px;color:#9aa3ae;">Searching ships near ${esc(sel.name)}…</div>`;
-      results.style.display = 'block';
-      bindRows();
-      fetch('/api/ships?q=' + encodeURIComponent(q) + '&lat=' + sel.lat + '&lon=' + sel.lng)
-        .then(r => r.json())
-        .then(json => {
-          if (mySeq !== seq) return; // a newer query superseded this one
-          const ships = json.ships || [];
-          results.innerHTML = extraRows(q) + (ships.length ? ships.map(s => `
-            <div class="search-row" data-ship data-name="${esc(s.name)}" data-imo="${esc(s.imo)}" style="${rowStyle}">
-              <span style="font-size:13px;font-weight:600;color:#0f1b2d;">${esc(s.name)}</span>
-              <span style="font-size:11px;color:#9aa3ae;">${esc(s.type || 'Ship')}${s.lastReport ? ' · pos ' + esc(s.lastReport) : ''}</span>
-              <span style="margin-left:auto;font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#9aa3ae;">~${esc(s.distanceKm)} km · IMO ${esc(s.imo)}</span>
-            </div>`).join('')
-            : `<div style="padding:10px 12px;font-size:12.5px;color:#9aa3ae;">No matching ships within ~250 km of ${esc(sel.name)}.</div>`);
-          bindRows();
-        })
-        .catch(() => {
-          if (mySeq !== seq) return;
-          results.innerHTML = extraRows(q) + '<div style="padding:10px 12px;font-size:12.5px;color:#b91c1c;">Ship search failed — try again.</div>';
-          bindRows();
-        });
-    };
-
-    input.addEventListener('input', () => {
-      clearTimeout(timer);
-      timer = setTimeout(search, 300);
-    });
-    input.addEventListener('focus', () => { if (input.value.trim().length >= 2) search(); });
-    input.addEventListener('blur', () => { setTimeout(() => { results.style.display = 'none'; }, 150); });
-    input.addEventListener('keydown', e => {
-      if (e.key === 'Escape') { results.style.display = 'none'; input.blur(); }
-    });
-
-    const clearBtn = document.getElementById('clearTrack');
-    if (clearBtn) clearBtn.addEventListener('click', () => { state.mapMode = null; render(); });
+      <div style="padding:10px 18px 16px;font-size:11px;color:#9aa3ae;font-family:'JetBrains Mono',monospace;">Live vessel positions © VesselFinder · click a port to see all ships in its area</div>`;
   }
 
   function renderBoard(d) {
@@ -719,7 +620,6 @@
     app.querySelectorAll('[data-port]').forEach(el => {
       el.addEventListener('click', () => {
         state.selectedId = el.getAttribute('data-port');
-        state.mapMode = null; // picking a port returns the map to port view
         render();
       });
     });
@@ -729,8 +629,6 @@
         render();
       });
     });
-
-    bindShipSearch(d.sel);
 
     const syncBtn = document.getElementById('syncBtn');
     if (syncBtn) syncBtn.addEventListener('click', doSync);
