@@ -358,9 +358,14 @@
   function renderMap(d) {
     const sel = d.sel;
 
-    // Same iframe VesselFinder's official aismap.js embed script generates —
-    // all ships in the port area: center on the port, zoom 8.
-    const src = `https://www.vesselfinder.com/aismap?width=100%25&height=460&zoom=8&lat=${sel.lat}&lon=${sel.lng}&names=false&track=false&fleet=false&fleet_name=false`;
+    // Exact URL VesselFinder's official aismap.js embed generates — all ships
+    // in the port area, centered on the port at zoom 8. store_pos=false is
+    // deliberate: the embed otherwise restores its last stored map position
+    // and ignores our center, so switching ports wouldn't move the map.
+    const src = `https://www.vesselfinder.com/aismap?zoom=8&lat=${sel.lat}&lon=${sel.lng}`
+      + '&width=100%25&height=460&names=false&track=false&fleet=false&fleet_name=false'
+      + '&fleet_hide_old_positions=false&clicktoact=false&store_pos=false'
+      + '&ra=' + encodeURIComponent(location.href);
 
     return `
       <div style="padding:15px 18px 12px;border-bottom:1px solid #eef1f4;display:flex;justify-content:space-between;align-items:center;gap:10px;">
