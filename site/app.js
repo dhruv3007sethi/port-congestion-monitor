@@ -4,19 +4,9 @@
   const ACCENT = '#0e7490';
   const SHOW_JSON = true;
   const DEFAULT_VIEW = 'map';
-  // VesselFinder fleet tracking — mirrors the official embed snippet:
-  // key from the user profile, a named fleet from the fleet list, map
-  // centered at the given coordinates, positions up to timespan minutes old.
-  const VF_FLEET = {
-    key: 'e48ab3d80a0e2a9bf28930f2dd08800c',
-    name: 'Carnival',
-    lat: '36.00',
-    lon: '-5.40',
-    timespan: '1440'
-  };
 
-  // mapMode: null = port view; { type:'ship', imo|mmsi, name } = single-ship
-  // tracking; { type:'fleet' } = fleet view (uses the VF_FLEET config)
+  // mapMode: null = port view (all ships in the port area); { type:'ship',
+  // imo|mmsi, name } = single-ship tracking
   const state = { selectedId: 'SGSIN', view: null, mapMode: null };
 
   const LS_KEY = 'pcm_settings_v1';
@@ -375,26 +365,21 @@
       const idParam = m.imo ? `imo=${encodeURIComponent(m.imo)}` : `mmsi=${encodeURIComponent(m.mmsi)}`;
       return `${base}&zoom=undefined&lat=undefined&lon=undefined&names=true&${idParam}&track=true&fleet=false&fleet_name=false`;
     }
-    if (m && m.type === 'fleet') {
-      // exact parameters of VesselFinder's fleet-tracking embed snippet
-      return `${base}&zoom=undefined&lat=${VF_FLEET.lat}&lon=${VF_FLEET.lon}&names=true&track=false&fleet=${encodeURIComponent(VF_FLEET.key)}&fleet_name=${encodeURIComponent(VF_FLEET.name)}&fleet_timespan=${VF_FLEET.timespan}`;
-    }
-    return `${base}&zoom=10&lat=${sel.lat}&lon=${sel.lng}&names=false&track=false&fleet=false&fleet_name=false`;
+    // all ships in the port area — the plain area embed: center + zoom 8
+    return `${base}&zoom=8&lat=${sel.lat}&lon=${sel.lng}&names=false&track=false&fleet=false&fleet_name=false`;
   }
 
   function renderMap(d) {
     const sel = d.sel;
     const m = state.mapMode;
 
-    const fleetLabel = m && m.type === 'fleet' ? (m.name || 'all ships') : '';
     const title = m && m.type === 'ship' ? `Tracking ${esc(m.name)}`
-      : m && m.type === 'fleet' ? `My fleet — ${esc(fleetLabel)}`
-      : `Live AIS map — ${esc(sel.name)}`;
+      : `All ships around ${esc(sel.name)}`;
 
     const trackBar = m ? `
       <div style="margin:12px 16px 0;display:flex;align-items:center;gap:9px;background:#f0f7fa;border:1px solid #cde3ee;border-radius:9px;padding:8px 12px;font-size:12.5px;color:#0f1b2d;">
-        <span style="font-weight:600;">${m.type === 'ship' ? '⛴ ' + esc(m.name) : '⚓ Fleet: ' + esc(fleetLabel)}</span>
-        <span style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#7a8593;">${m.type === 'ship' ? (m.imo ? 'IMO ' + esc(m.imo) : 'MMSI ' + esc(m.mmsi)) + ' · 24h track shown' : 'names shown · positions up to 24h old'}</span>
+        <span style="font-weight:600;">⛴ ${esc(m.name)}</span>
+        <span style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#7a8593;">${(m.imo ? 'IMO ' + esc(m.imo) : 'MMSI ' + esc(m.mmsi))} · 24h track shown</span>
         <button id="clearTrack" title="Back to port view" style="margin-left:auto;border:none;background:transparent;color:#0e7490;font-weight:700;font-size:13px;cursor:pointer;">✕ port view</button>
       </div>` : '';
 
@@ -404,7 +389,7 @@
         <span style="font-size:11px;color:#9aa3ae;font-family:'JetBrains Mono',monospace;">VESSELFINDER</span>
       </div>
       <div style="padding:12px 16px 0;position:relative;">
-        <input id="shipSearch" type="text" autocomplete="off" placeholder="Track a ship — name, IMO or MMSI (e.g. EVER GIVEN, 9811000) — or type “fleet” for ${esc(VF_FLEET.name)}…"
+        <input id="shipSearch" type="text" autocomplete="off" placeholder="Track a ship — name, IMO or MMSI (e.g. EVER GIVEN, 9811000)…"
           style="width:100%;padding:9px 12px;border:1px solid #dde2e8;border-radius:9px;font-family:'Public Sans',sans-serif;font-size:13px;color:#0f1b2d;background:#fff;outline-color:${d.accent};">
         <div id="shipSearchResults" style="display:none;position:absolute;left:16px;right:16px;top:calc(100% + 4px);background:#fff;border:1px solid #dde2e8;border-radius:9px;box-shadow:0 10px 28px rgba(15,27,45,0.14);z-index:100;overflow:hidden;max-height:280px;overflow-y:auto;"></div>
       </div>
@@ -412,7 +397,7 @@
       <div style="height:460px;margin:13px 16px 0;border-radius:10px;overflow:hidden;border:1px solid #e1e7ee;background:#e7eef4;">
         <iframe title="VesselFinder live AIS map" width="100%" height="460" frameborder="0" style="border:0;display:block;" src="${mapSrc(sel)}"></iframe>
       </div>
-      <div style="padding:10px 18px 16px;font-size:11px;color:#9aa3ae;font-family:'JetBrains Mono',monospace;">Live vessel positions © VesselFinder · search a ship to track it · type “fleet” to show ${esc(VF_FLEET.name)}</div>`;
+      <div style="padding:10px 18px 16px;font-size:11px;color:#9aa3ae;font-family:'JetBrains Mono',monospace;">Live vessel positions © VesselFinder · click a port to see all ships in its area · search a ship to track it</div>`;
   }
 
   // The search dropdown updates its own DOM instead of calling render() —
@@ -431,8 +416,7 @@
         // mousedown, not click — it fires before the input's blur hides the list
         el.addEventListener('mousedown', () => {
           const ds = el.dataset;
-          if (ds.fleet) state.mapMode = { type: 'fleet', name: VF_FLEET.name };
-          else state.mapMode = { type: 'ship', name: ds.name, imo: ds.imo || null, mmsi: ds.mmsi || null };
+          state.mapMode = { type: 'ship', name: ds.name, imo: ds.imo || null, mmsi: ds.mmsi || null };
           render();
         });
       });
@@ -442,10 +426,6 @@
       let html = '';
       if (/^\d{7}$/.test(q)) html += `<div class="search-row" data-ship data-name="IMO ${esc(q)}" data-imo="${esc(q)}" style="${rowStyle}"><span style="font-size:13px;font-weight:600;color:#0e7490;">Track IMO ${esc(q)}</span></div>`;
       if (/^\d{9}$/.test(q)) html += `<div class="search-row" data-ship data-name="MMSI ${esc(q)}" data-mmsi="${esc(q)}" style="${rowStyle}"><span style="font-size:13px;font-weight:600;color:#0e7490;">Track MMSI ${esc(q)}</span></div>`;
-      const ql = q.toLowerCase();
-      if (!/^\d+$/.test(q) && ('fleet'.includes(ql) || VF_FLEET.name.toLowerCase().includes(ql))) {
-        html += `<div class="search-row" data-ship data-fleet="1" style="${rowStyle}"><span style="font-size:13px;font-weight:600;color:#0e7490;">⚓ Track fleet “${esc(VF_FLEET.name)}” from your VesselFinder fleet list</span></div>`;
-      }
       return html;
     };
 
