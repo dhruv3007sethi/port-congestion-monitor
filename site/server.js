@@ -12,7 +12,7 @@ try {
 }
 
 const { DEFAULT_MODEL, runSync } = require('./lib/pipeline');
-const { searchShips } = require('./lib/ships');
+const { searchShips, searchShipsNear } = require('./lib/ships');
 
 const ROOT = __dirname;
 const PORT = process.env.PORT || 8080;
@@ -66,11 +66,15 @@ function handleSync(req, res) {
 }
 
 async function handleShips(req, res) {
-  const q = (new URL(req.url, 'http://localhost').searchParams.get('q') || '').trim();
+  const params = new URL(req.url, 'http://localhost').searchParams;
+  const q = (params.get('q') || '').trim();
+  const lat = parseFloat(params.get('lat')), lon = parseFloat(params.get('lon'));
   res.setHeader('Content-Type', 'application/json');
   if (q.length < 2) return res.end(JSON.stringify({ ships: [] }));
   try {
-    const ships = await searchShips(q);
+    const ships = Number.isFinite(lat) && Number.isFinite(lon)
+      ? await searchShipsNear(q, lat, lon)
+      : await searchShips(q);
     res.end(JSON.stringify({ ships }));
   } catch (e) {
     res.statusCode = 502;

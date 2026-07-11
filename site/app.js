@@ -389,7 +389,7 @@
         <span style="font-size:11px;color:#9aa3ae;font-family:'JetBrains Mono',monospace;">VESSELFINDER</span>
       </div>
       <div style="padding:12px 16px 0;position:relative;">
-        <input id="shipSearch" type="text" autocomplete="off" placeholder="Track a ship — name, IMO or MMSI (e.g. EVER GIVEN, 9811000)…"
+        <input id="shipSearch" type="text" autocomplete="off" placeholder="Track a ship near ${esc(sel.name)} — name, IMO or MMSI…"
           style="width:100%;padding:9px 12px;border:1px solid #dde2e8;border-radius:9px;font-family:'Public Sans',sans-serif;font-size:13px;color:#0f1b2d;background:#fff;outline-color:${d.accent};">
         <div id="shipSearchResults" style="display:none;position:absolute;left:16px;right:16px;top:calc(100% + 4px);background:#fff;border:1px solid #dde2e8;border-radius:9px;box-shadow:0 10px 28px rgba(15,27,45,0.14);z-index:100;overflow:hidden;max-height:280px;overflow-y:auto;"></div>
       </div>
@@ -402,8 +402,9 @@
 
   // The search dropdown updates its own DOM instead of calling render() —
   // a full re-render on every keystroke would destroy the input's focus.
-  // Ship name lookups go through /api/ships (VesselFinder public search).
-  function bindShipSearch() {
+  // Ship name lookups go through /api/ships (VesselFinder public search),
+  // filtered server-side to ships near the selected port.
+  function bindShipSearch(sel) {
     const input = document.getElementById('shipSearch');
     const results = document.getElementById('shipSearchResults');
     if (!input || !results) return;
@@ -433,10 +434,10 @@
       const q = input.value.trim();
       if (q.length < 2) { results.style.display = 'none'; return; }
       const mySeq = ++seq;
-      results.innerHTML = extraRows(q) + '<div style="padding:10px 12px;font-size:12.5px;color:#9aa3ae;">Searching ships…</div>';
+      results.innerHTML = extraRows(q) + `<div style="padding:10px 12px;font-size:12.5px;color:#9aa3ae;">Searching ships near ${esc(sel.name)}…</div>`;
       results.style.display = 'block';
       bindRows();
-      fetch('/api/ships?q=' + encodeURIComponent(q))
+      fetch('/api/ships?q=' + encodeURIComponent(q) + '&lat=' + sel.lat + '&lon=' + sel.lng)
         .then(r => r.json())
         .then(json => {
           if (mySeq !== seq) return; // a newer query superseded this one
@@ -444,10 +445,10 @@
           results.innerHTML = extraRows(q) + (ships.length ? ships.map(s => `
             <div class="search-row" data-ship data-name="${esc(s.name)}" data-imo="${esc(s.imo)}" style="${rowStyle}">
               <span style="font-size:13px;font-weight:600;color:#0f1b2d;">${esc(s.name)}</span>
-              <span style="font-size:11px;color:#9aa3ae;">${esc(s.type || 'Ship')}</span>
-              <span style="margin-left:auto;font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#9aa3ae;">IMO ${esc(s.imo)}</span>
+              <span style="font-size:11px;color:#9aa3ae;">${esc(s.type || 'Ship')}${s.lastReport ? ' · pos ' + esc(s.lastReport) : ''}</span>
+              <span style="margin-left:auto;font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#9aa3ae;">~${esc(s.distanceKm)} km · IMO ${esc(s.imo)}</span>
             </div>`).join('')
-            : '<div style="padding:10px 12px;font-size:12.5px;color:#9aa3ae;">No ships found for that name.</div>');
+            : `<div style="padding:10px 12px;font-size:12.5px;color:#9aa3ae;">No matching ships within ~250 km of ${esc(sel.name)}.</div>`);
           bindRows();
         })
         .catch(() => {
@@ -729,7 +730,7 @@
       });
     });
 
-    bindShipSearch();
+    bindShipSearch(d.sel);
 
     const syncBtn = document.getElementById('syncBtn');
     if (syncBtn) syncBtn.addEventListener('click', doSync);
