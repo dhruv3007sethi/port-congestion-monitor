@@ -1,0 +1,2 @@
+# local dev server — production uses the functions in api/
+server.js

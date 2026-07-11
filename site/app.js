@@ -358,11 +358,6 @@
   function renderMap(d) {
     const sel = d.sel;
 
-    const chips = d.ports.map(p => {
-      const selected = p.id === sel.id;
-      return `<button class="port-chip" data-port="${p.id}" style="display:inline-flex;align-items:center;gap:6px;border:1.5px solid ${selected ? p.dotColor : '#dde2e8'};background:${selected ? p.dotHalo : '#fff'};color:#0f1b2d;font-family:'Public Sans',sans-serif;font-size:12px;font-weight:600;padding:5px 11px;border-radius:20px;cursor:pointer;white-space:nowrap;"><span style="width:8px;height:8px;border-radius:50%;background:${p.dotColor};flex:none;"></span>${esc(p.name)}</button>`;
-    }).join('');
-
     // Same iframe VesselFinder's official aismap.js embed script generates.
     const src = `https://www.vesselfinder.com/aismap?zoom=10&lat=${sel.lat}&lon=${sel.lng}&width=100%25&height=460&names=false&track=false&fleet=false&fleet_name=false`;
 
@@ -371,11 +366,58 @@
         <span style="font-family:'Schibsted Grotesk',sans-serif;font-weight:600;font-size:14px;">Live AIS map — ${esc(sel.name)}</span>
         <span style="font-size:11px;color:#9aa3ae;font-family:'JetBrains Mono',monospace;">VESSELFINDER</span>
       </div>
-      <div style="padding:12px 16px 0;display:flex;gap:7px;flex-wrap:wrap;">${chips}</div>
+      <div style="padding:12px 16px 0;position:relative;">
+        <input id="portSearch" type="text" autocomplete="off" placeholder="Search tracked ports — name, country or code (e.g. Singapore, NLRTM)…"
+          style="width:100%;padding:9px 12px;border:1px solid #dde2e8;border-radius:9px;font-family:'Public Sans',sans-serif;font-size:13px;color:#0f1b2d;background:#fff;outline-color:${d.accent};">
+        <div id="portSearchResults" style="display:none;position:absolute;left:16px;right:16px;top:calc(100% + 4px);background:#fff;border:1px solid #dde2e8;border-radius:9px;box-shadow:0 10px 28px rgba(15,27,45,0.14);z-index:100;overflow:hidden;"></div>
+      </div>
       <div style="height:460px;margin:13px 16px 0;border-radius:10px;overflow:hidden;border:1px solid #e1e7ee;background:#e7eef4;">
         <iframe title="VesselFinder live AIS map — ${esc(sel.name)}" width="100%" height="460" frameborder="0" style="border:0;display:block;" src="${src}"></iframe>
       </div>
-      <div style="padding:10px 18px 16px;font-size:11px;color:#9aa3ae;font-family:'JetBrains Mono',monospace;">Live vessel positions © VesselFinder · click a port chip to re-center · chip dot = congestion level</div>`;
+      <div style="padding:10px 18px 16px;font-size:11px;color:#9aa3ae;font-family:'JetBrains Mono',monospace;">Live vessel positions © VesselFinder · search a port to re-center the map</div>`;
+  }
+
+  // The search dropdown updates its own DOM instead of calling render() —
+  // a full re-render on every keystroke would destroy the input's focus.
+  function bindPortSearch(d) {
+    const input = document.getElementById('portSearch');
+    const results = document.getElementById('portSearchResults');
+    if (!input || !results) return;
+
+    const matchesFor = q => d.ports.filter(p =>
+      (p.name + ' ' + p.country + ' ' + p.id).toLowerCase().includes(q));
+
+    const choose = id => { state.selectedId = id; render(); };
+
+    const show = () => {
+      const q = input.value.trim().toLowerCase();
+      if (!q) { results.style.display = 'none'; return; }
+      const matches = matchesFor(q);
+      results.innerHTML = matches.length ? matches.map(p => `
+        <div class="search-row" data-search-port="${p.id}" style="display:flex;align-items:center;gap:9px;padding:9px 12px;cursor:pointer;border-bottom:1px solid #f2f4f7;">
+          <span style="width:8px;height:8px;border-radius:50%;background:${p.dotColor};flex:none;"></span>
+          <span style="font-size:13px;font-weight:600;color:#0f1b2d;">${esc(p.name)}</span>
+          <span style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#9aa3ae;">${esc(p.locode)} · ${esc(p.country)}</span>
+          <span style="margin-left:auto;font-size:11px;color:${p.levelColor};font-weight:600;">${esc(p.levelLabel)}</span>
+        </div>`).join('')
+        : '<div style="padding:10px 12px;font-size:12.5px;color:#9aa3ae;">No tracked port matches — 9 ports are monitored.</div>';
+      results.style.display = 'block';
+      results.querySelectorAll('[data-search-port]').forEach(el => {
+        // mousedown, not click — it fires before the input's blur hides the list
+        el.addEventListener('mousedown', () => choose(el.getAttribute('data-search-port')));
+      });
+    };
+
+    input.addEventListener('input', show);
+    input.addEventListener('focus', show);
+    input.addEventListener('blur', () => { setTimeout(() => { results.style.display = 'none'; }, 120); });
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { results.style.display = 'none'; input.blur(); }
+      if (e.key === 'Enter') {
+        const first = matchesFor(input.value.trim().toLowerCase())[0];
+        if (first) choose(first.id);
+      }
+    });
   }
 
   function renderBoard(d) {
@@ -634,6 +676,8 @@
         render();
       });
     });
+
+    bindPortSearch(d);
 
     const syncBtn = document.getElementById('syncBtn');
     if (syncBtn) syncBtn.addEventListener('click', doSync);
