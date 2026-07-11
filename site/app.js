@@ -282,7 +282,7 @@
 
     return `
     <div id="settingsOverlay" style="position:fixed;inset:0;background:rgba(15,27,45,0.45);z-index:1000;display:flex;align-items:center;justify-content:center;">
-      <div style="background:#fff;border-radius:14px;padding:24px;width:460px;max-width:90vw;box-shadow:0 20px 60px rgba(0,0,0,0.3);font-family:'Public Sans',sans-serif;">
+      <div style="background:#fff;border-radius:14px;padding:24px;width:460px;max-width:90vw;max-height:85vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.3);font-family:'Public Sans',sans-serif;">
         <div style="font-family:'Schibsted Grotesk',sans-serif;font-weight:700;font-size:18px;margin-bottom:4px;">Live data settings</div>
         <div style="font-size:12.5px;color:#7a8593;margin-bottom:14px;line-height:1.5;">
           API keys are read from a <code style="background:#f6f8fa;padding:1px 5px;border-radius:4px;">.env</code> file next to <code style="background:#f6f8fa;padding:1px 5px;border-radius:4px;">server.js</code> — not typed into the browser. Each sync runs a 3-agent pipeline: a <strong>fetcher</strong> gathers GoComet's live tracker, 9 Portcast port pages, 9 VesselFinder AIS pages and 9 Tavily searches; an <strong>analyst</strong> LLM cross-checks the providers (averaging wait times when they disagree) and writes per-port notes; a <strong>JSON writer</strong> LLM converts the notes into the dashboard's schema (2 OpenRouter calls total).
