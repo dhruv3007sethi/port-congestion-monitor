@@ -9,7 +9,7 @@
   const VF_FLEET_KEY = 'e48ab3d80a0e2a9bf28930f2dd08800c';
 
   // mapMode: null = port view; { type:'ship', imo|mmsi, name } = single-ship
-  // tracking; { type:'fleet', name } = fleet view (needs settings.vfFleetKey)
+  // tracking; { type:'fleet', name } = fleet view (uses VF_FLEET_KEY)
   const state = { selectedId: 'SGSIN', view: null, mapMode: null };
 
   const LS_KEY = 'pcm_settings_v1';
