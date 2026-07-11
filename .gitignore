@@ -1,0 +1,4 @@
+# Real API keys live here — never commit
+site/.env
+
+node_modules/
