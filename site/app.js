@@ -5,7 +5,9 @@
   const SHOW_JSON = true;
   const DEFAULT_VIEW = 'map';
 
-  const state = { selectedId: 'SGSIN', view: null };
+  // mapMode: null = port view; { type:'ship', imo|mmsi, name } = single-ship
+  // tracking; { type:'fleet', name } = fleet view (needs settings.vfFleetKey)
+  const state = { selectedId: 'SGSIN', view: null, mapMode: null };
 
   const LS_KEY = 'pcm_settings_v1';
   const DEFAULT_MODEL = 'google/gemini-3-flash-preview';
@@ -17,7 +19,7 @@
     localStorage.setItem(LS_KEY, JSON.stringify(settings));
   }
 
-  const settings = Object.assign({ model: DEFAULT_MODEL }, loadSettings());
+  const settings = Object.assign({ model: DEFAULT_MODEL, vfFleetKey: '' }, loadSettings());
   const sync = { status: 'idle', error: null, lastSyncAt: null };
   const liveOverrides = {};
   let settingsOpen = false;
@@ -297,10 +299,12 @@
           3. Restart the server: <code style="background:#fff;border:1px solid #eef1f4;padding:1px 5px;border-radius:4px;">node server.js</code>
         </div>` : ''}
         <label style="display:block;font-size:12px;font-weight:600;margin-bottom:5px;">OpenRouter model override (optional)</label>
-        <input id="modelInput" type="text" value="${esc(settings.model || DEFAULT_MODEL)}" placeholder="${esc(serverStatus.model || DEFAULT_MODEL)}" style="width:100%;padding:9px 11px;border:1px solid #dde2e8;border-radius:8px;font-family:'JetBrains Mono',monospace;font-size:12.5px;margin-bottom:18px;">
+        <input id="modelInput" type="text" value="${esc(settings.model || DEFAULT_MODEL)}" placeholder="${esc(serverStatus.model || DEFAULT_MODEL)}" style="width:100%;padding:9px 11px;border:1px solid #dde2e8;border-radius:8px;font-family:'JetBrains Mono',monospace;font-size:12.5px;margin-bottom:14px;">
+        <label style="display:block;font-size:12px;font-weight:600;margin-bottom:5px;">VesselFinder fleet key (optional)</label>
+        <input id="fleetKeyInput" type="text" value="${esc(settings.vfFleetKey || '')}" placeholder="from your VesselFinder user profile — enables fleet view in the map search" style="width:100%;padding:9px 11px;border:1px solid #dde2e8;border-radius:8px;font-family:'JetBrains Mono',monospace;font-size:12.5px;margin-bottom:18px;">
         <div style="display:flex;justify-content:flex-end;gap:8px;">
           <button id="cancelSettingsBtn" style="border:1px solid #dde2e8;background:#fff;color:#5b6675;font-weight:600;font-size:13px;padding:8px 16px;border-radius:8px;cursor:pointer;">Close</button>
-          <button id="saveSettingsBtn" style="border:none;background:${ACCENT};color:#fff;font-weight:600;font-size:13px;padding:8px 16px;border-radius:8px;cursor:pointer;">Save model</button>
+          <button id="saveSettingsBtn" style="border:none;background:${ACCENT};color:#fff;font-weight:600;font-size:13px;padding:8px 16px;border-radius:8px;cursor:pointer;">Save</button>
         </div>
       </div>
     </div>`;
@@ -355,69 +359,123 @@
     </div>`;
   }
 
+  function mapSrc(sel) {
+    // Same iframe VesselFinder's official aismap.js embed script generates.
+    const base = 'https://www.vesselfinder.com/aismap?width=100%25&height=460';
+    const m = state.mapMode;
+    if (m && m.type === 'ship') {
+      const idParam = m.imo ? `imo=${encodeURIComponent(m.imo)}` : `mmsi=${encodeURIComponent(m.mmsi)}`;
+      return `${base}&zoom=undefined&lat=undefined&lon=undefined&names=true&${idParam}&track=true&fleet=false&fleet_name=false`;
+    }
+    if (m && m.type === 'fleet' && settings.vfFleetKey) {
+      return `${base}&zoom=7&lat=${sel.lat}&lon=${sel.lng}&names=true&track=false&fleet=${encodeURIComponent(settings.vfFleetKey)}&fleet_name=${encodeURIComponent(m.name)}&fleet_timespan=1440`;
+    }
+    return `${base}&zoom=10&lat=${sel.lat}&lon=${sel.lng}&names=false&track=false&fleet=false&fleet_name=false`;
+  }
+
   function renderMap(d) {
     const sel = d.sel;
+    const m = state.mapMode;
 
-    // Same iframe VesselFinder's official aismap.js embed script generates.
-    const src = `https://www.vesselfinder.com/aismap?zoom=10&lat=${sel.lat}&lon=${sel.lng}&width=100%25&height=460&names=false&track=false&fleet=false&fleet_name=false`;
+    const title = m && m.type === 'ship' ? `Tracking ${esc(m.name)}`
+      : m && m.type === 'fleet' ? `Fleet — ${esc(m.name)}`
+      : `Live AIS map — ${esc(sel.name)}`;
+
+    const trackBar = m ? `
+      <div style="margin:12px 16px 0;display:flex;align-items:center;gap:9px;background:#f0f7fa;border:1px solid #cde3ee;border-radius:9px;padding:8px 12px;font-size:12.5px;color:#0f1b2d;">
+        <span style="font-weight:600;">${m.type === 'ship' ? '⛴ ' + esc(m.name) : '⚓ Fleet: ' + esc(m.name)}</span>
+        <span style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#7a8593;">${m.type === 'ship' ? (m.imo ? 'IMO ' + esc(m.imo) : 'MMSI ' + esc(m.mmsi)) + ' · 24h track shown' : 'positions up to 24h old'}</span>
+        <button id="clearTrack" title="Back to port view" style="margin-left:auto;border:none;background:transparent;color:#0e7490;font-weight:700;font-size:13px;cursor:pointer;">✕ port view</button>
+      </div>` : '';
 
     return `
       <div style="padding:15px 18px 12px;border-bottom:1px solid #eef1f4;display:flex;justify-content:space-between;align-items:center;gap:10px;">
-        <span style="font-family:'Schibsted Grotesk',sans-serif;font-weight:600;font-size:14px;">Live AIS map — ${esc(sel.name)}</span>
+        <span style="font-family:'Schibsted Grotesk',sans-serif;font-weight:600;font-size:14px;">${title}</span>
         <span style="font-size:11px;color:#9aa3ae;font-family:'JetBrains Mono',monospace;">VESSELFINDER</span>
       </div>
       <div style="padding:12px 16px 0;position:relative;">
-        <input id="portSearch" type="text" autocomplete="off" placeholder="Search tracked ports — name, country or code (e.g. Singapore, NLRTM)…"
+        <input id="shipSearch" type="text" autocomplete="off" placeholder="Track a ship — name, IMO or MMSI (e.g. EVER GIVEN, 9811000)${settings.vfFleetKey ? ' — or a fleet name' : ''}…"
           style="width:100%;padding:9px 12px;border:1px solid #dde2e8;border-radius:9px;font-family:'Public Sans',sans-serif;font-size:13px;color:#0f1b2d;background:#fff;outline-color:${d.accent};">
-        <div id="portSearchResults" style="display:none;position:absolute;left:16px;right:16px;top:calc(100% + 4px);background:#fff;border:1px solid #dde2e8;border-radius:9px;box-shadow:0 10px 28px rgba(15,27,45,0.14);z-index:100;overflow:hidden;"></div>
+        <div id="shipSearchResults" style="display:none;position:absolute;left:16px;right:16px;top:calc(100% + 4px);background:#fff;border:1px solid #dde2e8;border-radius:9px;box-shadow:0 10px 28px rgba(15,27,45,0.14);z-index:100;overflow:hidden;max-height:280px;overflow-y:auto;"></div>
       </div>
+      ${trackBar}
       <div style="height:460px;margin:13px 16px 0;border-radius:10px;overflow:hidden;border:1px solid #e1e7ee;background:#e7eef4;">
-        <iframe title="VesselFinder live AIS map — ${esc(sel.name)}" width="100%" height="460" frameborder="0" style="border:0;display:block;" src="${src}"></iframe>
+        <iframe title="VesselFinder live AIS map" width="100%" height="460" frameborder="0" style="border:0;display:block;" src="${mapSrc(sel)}"></iframe>
       </div>
-      <div style="padding:10px 18px 16px;font-size:11px;color:#9aa3ae;font-family:'JetBrains Mono',monospace;">Live vessel positions © VesselFinder · search a port to re-center the map</div>`;
+      <div style="padding:10px 18px 16px;font-size:11px;color:#9aa3ae;font-family:'JetBrains Mono',monospace;">Live vessel positions © VesselFinder · search a ship to track it${settings.vfFleetKey ? ' · type a fleet name for fleet view' : ''}</div>`;
   }
 
   // The search dropdown updates its own DOM instead of calling render() —
   // a full re-render on every keystroke would destroy the input's focus.
-  function bindPortSearch(d) {
-    const input = document.getElementById('portSearch');
-    const results = document.getElementById('portSearchResults');
+  // Ship name lookups go through /api/ships (VesselFinder public search).
+  function bindShipSearch() {
+    const input = document.getElementById('shipSearch');
+    const results = document.getElementById('shipSearchResults');
     if (!input || !results) return;
 
-    const matchesFor = q => d.ports.filter(p =>
-      (p.name + ' ' + p.country + ' ' + p.id).toLowerCase().includes(q));
+    let timer = null, seq = 0;
 
-    const choose = id => { state.selectedId = id; render(); };
-
-    const show = () => {
-      const q = input.value.trim().toLowerCase();
-      if (!q) { results.style.display = 'none'; return; }
-      const matches = matchesFor(q);
-      results.innerHTML = matches.length ? matches.map(p => `
-        <div class="search-row" data-search-port="${p.id}" style="display:flex;align-items:center;gap:9px;padding:9px 12px;cursor:pointer;border-bottom:1px solid #f2f4f7;">
-          <span style="width:8px;height:8px;border-radius:50%;background:${p.dotColor};flex:none;"></span>
-          <span style="font-size:13px;font-weight:600;color:#0f1b2d;">${esc(p.name)}</span>
-          <span style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#9aa3ae;">${esc(p.locode)} · ${esc(p.country)}</span>
-          <span style="margin-left:auto;font-size:11px;color:${p.levelColor};font-weight:600;">${esc(p.levelLabel)}</span>
-        </div>`).join('')
-        : '<div style="padding:10px 12px;font-size:12.5px;color:#9aa3ae;">No tracked port matches — 9 ports are monitored.</div>';
-      results.style.display = 'block';
-      results.querySelectorAll('[data-search-port]').forEach(el => {
+    const rowStyle = 'display:flex;align-items:center;gap:9px;padding:9px 12px;cursor:pointer;border-bottom:1px solid #f2f4f7;';
+    const bindRows = () => {
+      results.querySelectorAll('[data-ship]').forEach(el => {
         // mousedown, not click — it fires before the input's blur hides the list
-        el.addEventListener('mousedown', () => choose(el.getAttribute('data-search-port')));
+        el.addEventListener('mousedown', () => {
+          const ds = el.dataset;
+          if (ds.fleet) state.mapMode = { type: 'fleet', name: ds.fleet };
+          else state.mapMode = { type: 'ship', name: ds.name, imo: ds.imo || null, mmsi: ds.mmsi || null };
+          render();
+        });
       });
     };
 
-    input.addEventListener('input', show);
-    input.addEventListener('focus', show);
-    input.addEventListener('blur', () => { setTimeout(() => { results.style.display = 'none'; }, 120); });
+    const extraRows = q => {
+      let html = '';
+      if (/^\d{7}$/.test(q)) html += `<div class="search-row" data-ship data-name="IMO ${esc(q)}" data-imo="${esc(q)}" style="${rowStyle}"><span style="font-size:13px;font-weight:600;color:#0e7490;">Track IMO ${esc(q)}</span></div>`;
+      if (/^\d{9}$/.test(q)) html += `<div class="search-row" data-ship data-name="MMSI ${esc(q)}" data-mmsi="${esc(q)}" style="${rowStyle}"><span style="font-size:13px;font-weight:600;color:#0e7490;">Track MMSI ${esc(q)}</span></div>`;
+      if (settings.vfFleetKey && !/^\d+$/.test(q)) html += `<div class="search-row" data-ship data-fleet="${esc(q)}" style="${rowStyle}"><span style="font-size:13px;font-weight:600;color:#0e7490;">⚓ Show fleet “${esc(q)}” from your VesselFinder fleet list</span></div>`;
+      return html;
+    };
+
+    const search = () => {
+      const q = input.value.trim();
+      if (q.length < 2) { results.style.display = 'none'; return; }
+      const mySeq = ++seq;
+      results.innerHTML = extraRows(q) + '<div style="padding:10px 12px;font-size:12.5px;color:#9aa3ae;">Searching ships…</div>';
+      results.style.display = 'block';
+      bindRows();
+      fetch('/api/ships?q=' + encodeURIComponent(q))
+        .then(r => r.json())
+        .then(json => {
+          if (mySeq !== seq) return; // a newer query superseded this one
+          const ships = json.ships || [];
+          results.innerHTML = extraRows(q) + (ships.length ? ships.map(s => `
+            <div class="search-row" data-ship data-name="${esc(s.name)}" data-imo="${esc(s.imo)}" style="${rowStyle}">
+              <span style="font-size:13px;font-weight:600;color:#0f1b2d;">${esc(s.name)}</span>
+              <span style="font-size:11px;color:#9aa3ae;">${esc(s.type || 'Ship')}</span>
+              <span style="margin-left:auto;font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#9aa3ae;">IMO ${esc(s.imo)}</span>
+            </div>`).join('')
+            : '<div style="padding:10px 12px;font-size:12.5px;color:#9aa3ae;">No ships found for that name.</div>');
+          bindRows();
+        })
+        .catch(() => {
+          if (mySeq !== seq) return;
+          results.innerHTML = extraRows(q) + '<div style="padding:10px 12px;font-size:12.5px;color:#b91c1c;">Ship search failed — try again.</div>';
+          bindRows();
+        });
+    };
+
+    input.addEventListener('input', () => {
+      clearTimeout(timer);
+      timer = setTimeout(search, 300);
+    });
+    input.addEventListener('focus', () => { if (input.value.trim().length >= 2) search(); });
+    input.addEventListener('blur', () => { setTimeout(() => { results.style.display = 'none'; }, 150); });
     input.addEventListener('keydown', e => {
       if (e.key === 'Escape') { results.style.display = 'none'; input.blur(); }
-      if (e.key === 'Enter') {
-        const first = matchesFor(input.value.trim().toLowerCase())[0];
-        if (first) choose(first.id);
-      }
     });
+
+    const clearBtn = document.getElementById('clearTrack');
+    if (clearBtn) clearBtn.addEventListener('click', () => { state.mapMode = null; render(); });
   }
 
   function renderBoard(d) {
@@ -667,6 +725,7 @@
     app.querySelectorAll('[data-port]').forEach(el => {
       el.addEventListener('click', () => {
         state.selectedId = el.getAttribute('data-port');
+        state.mapMode = null; // picking a port returns the map to port view
         render();
       });
     });
@@ -677,7 +736,7 @@
       });
     });
 
-    bindPortSearch(d);
+    bindShipSearch();
 
     const syncBtn = document.getElementById('syncBtn');
     if (syncBtn) syncBtn.addEventListener('click', doSync);
@@ -691,6 +750,7 @@
       document.getElementById('cancelSettingsBtn').addEventListener('click', () => { settingsOpen = false; render(); });
       document.getElementById('saveSettingsBtn').addEventListener('click', () => {
         settings.model = document.getElementById('modelInput').value.trim() || DEFAULT_MODEL;
+        settings.vfFleetKey = document.getElementById('fleetKeyInput').value.trim();
         persistSettings();
         settingsOpen = false;
         render();

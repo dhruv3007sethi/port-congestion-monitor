@@ -12,6 +12,7 @@ try {
 }
 
 const { DEFAULT_MODEL, runSync } = require('./lib/pipeline');
+const { searchShips } = require('./lib/ships');
 
 const ROOT = __dirname;
 const PORT = process.env.PORT || 8080;
@@ -64,12 +65,28 @@ function handleSync(req, res) {
   });
 }
 
+async function handleShips(req, res) {
+  const q = (new URL(req.url, 'http://localhost').searchParams.get('q') || '').trim();
+  res.setHeader('Content-Type', 'application/json');
+  if (q.length < 2) return res.end(JSON.stringify({ ships: [] }));
+  try {
+    const ships = await searchShips(q);
+    res.end(JSON.stringify({ ships }));
+  } catch (e) {
+    res.statusCode = 502;
+    res.end(JSON.stringify({ error: e.message || 'Ship search failed' }));
+  }
+}
+
 const server = http.createServer((req, res) => {
   if (req.method === 'POST' && req.url === '/api/sync') {
     return handleSync(req, res);
   }
   if (req.method === 'GET' && req.url === '/api/status') {
     return handleStatus(req, res);
+  }
+  if (req.method === 'GET' && req.url.startsWith('/api/ships')) {
+    return handleShips(req, res);
   }
 
   const urlPath = decodeURIComponent(req.url.split('?')[0]);
