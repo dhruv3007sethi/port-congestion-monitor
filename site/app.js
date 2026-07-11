@@ -369,7 +369,10 @@
       return `${base}&zoom=undefined&lat=undefined&lon=undefined&names=true&${idParam}&track=true&fleet=false&fleet_name=false`;
     }
     if (m && m.type === 'fleet' && VF_FLEET_KEY) {
-      return `${base}&zoom=7&lat=${sel.lat}&lon=${sel.lng}&names=true&track=false&fleet=${encodeURIComponent(VF_FLEET_KEY)}&fleet_name=${encodeURIComponent(m.name)}&fleet_timespan=1440`;
+      // no fleet_name → VesselFinder highlights the entire fleet list;
+      // world zoom so ships scattered across oceans are all visible
+      const nameParam = m.name ? encodeURIComponent(m.name) : 'false';
+      return `${base}&zoom=3&lat=25&lon=40&names=true&track=false&fleet=${encodeURIComponent(VF_FLEET_KEY)}&fleet_name=${nameParam}&fleet_timespan=1440`;
     }
     return `${base}&zoom=10&lat=${sel.lat}&lon=${sel.lng}&names=false&track=false&fleet=false&fleet_name=false`;
   }
@@ -378,14 +381,15 @@
     const sel = d.sel;
     const m = state.mapMode;
 
+    const fleetLabel = m && m.type === 'fleet' ? (m.name || 'all ships') : '';
     const title = m && m.type === 'ship' ? `Tracking ${esc(m.name)}`
-      : m && m.type === 'fleet' ? `Fleet — ${esc(m.name)}`
+      : m && m.type === 'fleet' ? `My fleet — ${esc(fleetLabel)}`
       : `Live AIS map — ${esc(sel.name)}`;
 
     const trackBar = m ? `
       <div style="margin:12px 16px 0;display:flex;align-items:center;gap:9px;background:#f0f7fa;border:1px solid #cde3ee;border-radius:9px;padding:8px 12px;font-size:12.5px;color:#0f1b2d;">
-        <span style="font-weight:600;">${m.type === 'ship' ? '⛴ ' + esc(m.name) : '⚓ Fleet: ' + esc(m.name)}</span>
-        <span style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#7a8593;">${m.type === 'ship' ? (m.imo ? 'IMO ' + esc(m.imo) : 'MMSI ' + esc(m.mmsi)) + ' · 24h track shown' : 'positions up to 24h old'}</span>
+        <span style="font-weight:600;">${m.type === 'ship' ? '⛴ ' + esc(m.name) : '⚓ Fleet: ' + esc(fleetLabel)}</span>
+        <span style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#7a8593;">${m.type === 'ship' ? (m.imo ? 'IMO ' + esc(m.imo) : 'MMSI ' + esc(m.mmsi)) + ' · 24h track shown' : 'names shown · positions up to 24h old'}</span>
         <button id="clearTrack" title="Back to port view" style="margin-left:auto;border:none;background:transparent;color:#0e7490;font-weight:700;font-size:13px;cursor:pointer;">✕ port view</button>
       </div>` : '';
 
