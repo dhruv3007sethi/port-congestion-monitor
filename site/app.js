@@ -4,6 +4,9 @@
   const ACCENT = '#0e7490';
   const SHOW_JSON = true;
   const DEFAULT_VIEW = 'map';
+  // Personal VesselFinder fleet key (from the VesselFinder user profile) —
+  // enables fleet view in the map search bar.
+  const VF_FLEET_KEY = 'e48ab3d80a0e2a9bf28930f2dd08800c';
 
   // mapMode: null = port view; { type:'ship', imo|mmsi, name } = single-ship
   // tracking; { type:'fleet', name } = fleet view (needs settings.vfFleetKey)
@@ -19,7 +22,7 @@
     localStorage.setItem(LS_KEY, JSON.stringify(settings));
   }
 
-  const settings = Object.assign({ model: DEFAULT_MODEL, vfFleetKey: '' }, loadSettings());
+  const settings = Object.assign({ model: DEFAULT_MODEL }, loadSettings());
   const sync = { status: 'idle', error: null, lastSyncAt: null };
   const liveOverrides = {};
   let settingsOpen = false;
@@ -299,9 +302,7 @@
           3. Restart the server: <code style="background:#fff;border:1px solid #eef1f4;padding:1px 5px;border-radius:4px;">node server.js</code>
         </div>` : ''}
         <label style="display:block;font-size:12px;font-weight:600;margin-bottom:5px;">OpenRouter model override (optional)</label>
-        <input id="modelInput" type="text" value="${esc(settings.model || DEFAULT_MODEL)}" placeholder="${esc(serverStatus.model || DEFAULT_MODEL)}" style="width:100%;padding:9px 11px;border:1px solid #dde2e8;border-radius:8px;font-family:'JetBrains Mono',monospace;font-size:12.5px;margin-bottom:14px;">
-        <label style="display:block;font-size:12px;font-weight:600;margin-bottom:5px;">VesselFinder fleet key (optional)</label>
-        <input id="fleetKeyInput" type="text" value="${esc(settings.vfFleetKey || '')}" placeholder="from your VesselFinder user profile — enables fleet view in the map search" style="width:100%;padding:9px 11px;border:1px solid #dde2e8;border-radius:8px;font-family:'JetBrains Mono',monospace;font-size:12.5px;margin-bottom:18px;">
+        <input id="modelInput" type="text" value="${esc(settings.model || DEFAULT_MODEL)}" placeholder="${esc(serverStatus.model || DEFAULT_MODEL)}" style="width:100%;padding:9px 11px;border:1px solid #dde2e8;border-radius:8px;font-family:'JetBrains Mono',monospace;font-size:12.5px;margin-bottom:18px;">
         <div style="display:flex;justify-content:flex-end;gap:8px;">
           <button id="cancelSettingsBtn" style="border:1px solid #dde2e8;background:#fff;color:#5b6675;font-weight:600;font-size:13px;padding:8px 16px;border-radius:8px;cursor:pointer;">Close</button>
           <button id="saveSettingsBtn" style="border:none;background:${ACCENT};color:#fff;font-weight:600;font-size:13px;padding:8px 16px;border-radius:8px;cursor:pointer;">Save</button>
@@ -367,8 +368,8 @@
       const idParam = m.imo ? `imo=${encodeURIComponent(m.imo)}` : `mmsi=${encodeURIComponent(m.mmsi)}`;
       return `${base}&zoom=undefined&lat=undefined&lon=undefined&names=true&${idParam}&track=true&fleet=false&fleet_name=false`;
     }
-    if (m && m.type === 'fleet' && settings.vfFleetKey) {
-      return `${base}&zoom=7&lat=${sel.lat}&lon=${sel.lng}&names=true&track=false&fleet=${encodeURIComponent(settings.vfFleetKey)}&fleet_name=${encodeURIComponent(m.name)}&fleet_timespan=1440`;
+    if (m && m.type === 'fleet' && VF_FLEET_KEY) {
+      return `${base}&zoom=7&lat=${sel.lat}&lon=${sel.lng}&names=true&track=false&fleet=${encodeURIComponent(VF_FLEET_KEY)}&fleet_name=${encodeURIComponent(m.name)}&fleet_timespan=1440`;
     }
     return `${base}&zoom=10&lat=${sel.lat}&lon=${sel.lng}&names=false&track=false&fleet=false&fleet_name=false`;
   }
@@ -394,7 +395,7 @@
         <span style="font-size:11px;color:#9aa3ae;font-family:'JetBrains Mono',monospace;">VESSELFINDER</span>
       </div>
       <div style="padding:12px 16px 0;position:relative;">
-        <input id="shipSearch" type="text" autocomplete="off" placeholder="Track a ship — name, IMO or MMSI (e.g. EVER GIVEN, 9811000)${settings.vfFleetKey ? ' — or a fleet name' : ''}…"
+        <input id="shipSearch" type="text" autocomplete="off" placeholder="Track a ship — name, IMO or MMSI (e.g. EVER GIVEN, 9811000)${VF_FLEET_KEY ? ' — or a fleet name' : ''}…"
           style="width:100%;padding:9px 12px;border:1px solid #dde2e8;border-radius:9px;font-family:'Public Sans',sans-serif;font-size:13px;color:#0f1b2d;background:#fff;outline-color:${d.accent};">
         <div id="shipSearchResults" style="display:none;position:absolute;left:16px;right:16px;top:calc(100% + 4px);background:#fff;border:1px solid #dde2e8;border-radius:9px;box-shadow:0 10px 28px rgba(15,27,45,0.14);z-index:100;overflow:hidden;max-height:280px;overflow-y:auto;"></div>
       </div>
@@ -402,7 +403,7 @@
       <div style="height:460px;margin:13px 16px 0;border-radius:10px;overflow:hidden;border:1px solid #e1e7ee;background:#e7eef4;">
         <iframe title="VesselFinder live AIS map" width="100%" height="460" frameborder="0" style="border:0;display:block;" src="${mapSrc(sel)}"></iframe>
       </div>
-      <div style="padding:10px 18px 16px;font-size:11px;color:#9aa3ae;font-family:'JetBrains Mono',monospace;">Live vessel positions © VesselFinder · search a ship to track it${settings.vfFleetKey ? ' · type a fleet name for fleet view' : ''}</div>`;
+      <div style="padding:10px 18px 16px;font-size:11px;color:#9aa3ae;font-family:'JetBrains Mono',monospace;">Live vessel positions © VesselFinder · search a ship to track it${VF_FLEET_KEY ? ' · type a fleet name for fleet view' : ''}</div>`;
   }
 
   // The search dropdown updates its own DOM instead of calling render() —
@@ -432,7 +433,7 @@
       let html = '';
       if (/^\d{7}$/.test(q)) html += `<div class="search-row" data-ship data-name="IMO ${esc(q)}" data-imo="${esc(q)}" style="${rowStyle}"><span style="font-size:13px;font-weight:600;color:#0e7490;">Track IMO ${esc(q)}</span></div>`;
       if (/^\d{9}$/.test(q)) html += `<div class="search-row" data-ship data-name="MMSI ${esc(q)}" data-mmsi="${esc(q)}" style="${rowStyle}"><span style="font-size:13px;font-weight:600;color:#0e7490;">Track MMSI ${esc(q)}</span></div>`;
-      if (settings.vfFleetKey && !/^\d+$/.test(q)) html += `<div class="search-row" data-ship data-fleet="${esc(q)}" style="${rowStyle}"><span style="font-size:13px;font-weight:600;color:#0e7490;">⚓ Show fleet “${esc(q)}” from your VesselFinder fleet list</span></div>`;
+      if (VF_FLEET_KEY && !/^\d+$/.test(q)) html += `<div class="search-row" data-ship data-fleet="${esc(q)}" style="${rowStyle}"><span style="font-size:13px;font-weight:600;color:#0e7490;">⚓ Show fleet “${esc(q)}” from your VesselFinder fleet list</span></div>`;
       return html;
     };
 
@@ -750,7 +751,6 @@
       document.getElementById('cancelSettingsBtn').addEventListener('click', () => { settingsOpen = false; render(); });
       document.getElementById('saveSettingsBtn').addEventListener('click', () => {
         settings.model = document.getElementById('modelInput').value.trim() || DEFAULT_MODEL;
-        settings.vfFleetKey = document.getElementById('fleetKeyInput').value.trim();
         persistSettings();
         settingsOpen = false;
         render();
