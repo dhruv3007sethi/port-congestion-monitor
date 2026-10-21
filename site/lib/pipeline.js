@@ -2,7 +2,7 @@
 // serverless functions in api/.
 //
 // Three agents run in sequence:
-//   1. fetcher — gathers live provider data (GoComet, Portcast)
+//   1. fetcher — gathers live provider data (GoComet, Portcast, Maritime Optima)
 //      and Tavily search snippets. Pure I/O, no LLM.
 //   2. analyst — LLM pass that reads the fetched data and writes plain-text
 //      analyst notes per port (levels, trends, summaries, cited sources).
@@ -26,9 +26,11 @@ const PORTS = [
 ];
 
 // Data sources (for now): GoComet's public real-time tracker, Portcast's
-// per-port pages (structured numbers scraped from each) + Tavily search restricted to the domains below for
+// per-port pages, and Maritime Optima's public port pages (live AIS ships-in-port
+// count) — structured numbers scraped from each — + Tavily search restricted to the domains below for
 // qualitative context.
 const DATA_DOMAINS = ['gocomet.com', 'portcast.io'];
+const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
 const GOCOMET_URL = 'https://www.gocomet.com/real-time-port-congestion';
 
 async function fetchGoComet() {
@@ -83,19 +85,38 @@ async function fetchPortcast(port) {
   throw new Error('Portcast page layout changed — congestion Dataset not found');
 }
 
+// Maritime Optima's public port pages (LOCODE) show the live AIS count of
+// vessels currently in port (class A transponders, refreshed every ~5 minutes)
+// and how many recently departed. Covers all vessel types port-wide.
+async function fetchMaritimeOptima(port) {
+  const url = `https://maritimeoptima.com/public/ports/pages/${port.id}`;
+  const res = await fetch(url, { headers: { 'User-Agent': BROWSER_UA } });
+  if (!res.ok) throw new Error(`Maritime Optima ${res.status}`);
+  const text = (await res.text()).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
+  const inp = text.match(/Vessels in port:\s*([\d,]+)/);
+  if (!inp) throw new Error('Maritime Optima page layout changed — vessels-in-port count not found');
+  const dep = text.match(/Recently departed:\s*([\d,]+)/);
+  return {
+    url,
+    shipsInPort: parseInt(inp[1].replace(/,/g, ''), 10),
+    recentlyDeparted: dep ? parseInt(dep[1].replace(/,/g, ''), 10) : null
+  };
+}
+
 // Deterministic cross-check of the two waiting-time providers, both measured
 // in days. "agree" within half a day; otherwise the headline figure is their
 // average.
-function compareProviders(gcEntry, pc) {
+function compareProviders(gcEntry, pc, mo) {
   const gcDays = gcEntry && gcEntry.port && Number.isFinite(+gcEntry.port.delay) ? +gcEntry.port.delay : null;
   const pcDays = pc && Number.isFinite(pc.waitDays) ? pc.waitDays : null;
-  if (gcDays === null && pcDays === null) return null;
+  if (gcDays === null && pcDays === null && !mo) return null;
   const both = gcDays !== null && pcDays !== null;
   const any = gcDays !== null || pcDays !== null;
   const avgDays = both ? (gcDays + pcDays) / 2 : (gcDays !== null ? gcDays : pcDays);
   return {
     gocomet: gcDays === null ? null : { days: gcDays, level: gcEntry.port.delayLevel },
     portcast: pcDays === null ? null : { days: pcDays, level: pc.category, vessels: pc.vessels, changePct: pc.changePct },
+    maritimeoptima: mo ? { shipsInPort: mo.shipsInPort, recentlyDeparted: mo.recentlyDeparted } : null,
     agree: both ? Math.abs(gcDays - pcDays) <= 0.5 : null,
     avgDays: any ? Math.round(avgDays * 100) / 100 : null
   };
@@ -138,9 +159,19 @@ function portcastBlock(pc) {
   ].join('\n');
 }
 
-function buildDataBlocks(portResults, goComet, portcast) {
+function maritimeOptimaBlock(mo) {
+  if (!mo) return 'MARITIME OPTIMA LIVE DATA: not available for this port.';
+  return [
+    'MARITIME OPTIMA LIVE DATA (AIS count, ALL vessel types across the whole port area — not the container anchorage queue):',
+    `- vessels in port right now: ${mo.shipsInPort}`,
+    `- vessels recently departed: ${mo.recentlyDeparted === null ? 'n/a' : mo.recentlyDeparted}`,
+    `- source url: ${mo.url}`
+  ].join('\n');
+}
+
+function buildDataBlocks(portResults, goComet, portcast, maritimeOptima) {
   return portResults.map(({ port, data, error }) => {
-    const live = goCometBlock(goComet && goComet[port.id]) + '\n\n' + portcastBlock(portcast[port.id]);
+    const live = goCometBlock(goComet && goComet[port.id]) + '\n\n' + portcastBlock(portcast[port.id]) + '\n\n' + maritimeOptimaBlock(maritimeOptima[port.id]);
     let search;
     if (error) {
       search = `Search failed (${error}).`;
@@ -157,16 +188,16 @@ function buildDataBlocks(portResults, goComet, portcast) {
 
 // Agent 2 — "Analyst": reads the fetched data, decides every value, and
 // writes plain-text notes per port. It does NOT produce JSON.
-function buildAnalystPrompt(portResults, goComet, portcast) {
+function buildAnalystPrompt(portResults, goComet, portcast, maritimeOptima) {
   const ids = portResults.map(r => r.port.id).join(', ');
-  const blocks = buildDataBlocks(portResults, goComet, portcast);
+  const blocks = buildDataBlocks(portResults, goComet, portcast, maritimeOptima);
 
   return `You are the ANALYST agent in a three-agent pipeline (fetcher → analyst → JSON writer). The fetcher agent gathered the live provider data and search snippets below. Analyze current conditions and write concise plain-text analyst notes — one block per port, covering all of these port codes in this order: ${ids}.
 
 Write each block in exactly this shape (plain text, NO JSON, no markdown):
 PORT <code>
 level: <low|moderate|high|severe>
-vessels: <integer, vessels waiting at anchorage — copy Portcast's average vessels waiting per day exactly; if Portcast has no figure, estimate and lower conf>
+vessels: <integer, ships in port right now — copy Maritime Optima's vessels-in-port count exactly; if it has no data, estimate and lower conf>
 waitH: <integer, average waiting time in hours>
 berth: <integer 0-100, berth utilization percent>
 trend: <improving|stable|worsening>
@@ -180,7 +211,8 @@ sources:
 Rules for using the live provider data, when present for a port:
 - CROSS-CHECK the two providers: GoComet's current vessel delay vs Portcast's median waiting time this week (both in days). If both are present, waitH = the AVERAGE of the two, converted to hours and rounded. If only one is present, use that one.
 - In dataQuality, state both providers' figures and whether they agree, e.g. "GoComet reports 2 days vs Portcast 0.1 days — figures diverge; headline wait is the average of both." If they are within half a day of each other, say they agree.
-- vessels: comes ONLY from Portcast's average vessels waiting per day at anchorage. If Portcast has no figure for the port, estimate from context and say so in dataQuality.
+- vessels: comes ONLY from Maritime Optima's vessels-in-port count (live AIS, all vessel types) — never from Portcast or GoComet. If Maritime Optima has no data for the port, estimate from context and say so in dataQuality.
+- Maritime Optima counts cover ALL ship types across the whole port area — they supply the "vessels" figure but are NOT a congestion or waiting-time signal: never let a big ship count alone raise the level or waitH. Cite Maritime Optima (outlet "Maritime Optima", its "source url" above) when you use its counts.
 - level: weigh both providers' categories (map "medium" → "moderate"); if they disagree, pick the middle ground; use "severe" only if delays run 7 days or more.
 - trend: use Portcast's week-over-week change and GoComet's weekly vs monthly medians — improving if falling, worsening if rising, else stable.
 - conf: "high" when both providers have data and roughly agree; "medium" when they diverge strongly or only one provider has data; "low" when neither does.
@@ -275,7 +307,7 @@ function extractJsonArray(text) {
 }
 
 async function agentFetcher(tavilyKey) {
-  const [goComet, portcastList, portResults] = await Promise.all([
+  const [goComet, portcastList, maritimeList, portResults] = await Promise.all([
     fetchGoComet().catch(e => {
       console.warn('GoComet fetch failed, continuing without it:', e.message);
       return null;
@@ -283,6 +315,12 @@ async function agentFetcher(tavilyKey) {
     Promise.all(PORTS.map(port =>
       fetchPortcast(port).catch(e => {
         console.warn(`Portcast fetch failed for ${port.id}, continuing without it:`, e.message);
+        return null;
+      })
+    )),
+    Promise.all(PORTS.map(port =>
+      fetchMaritimeOptima(port).catch(e => {
+        console.warn(`Maritime Optima fetch failed for ${port.id}, continuing without it:`, e.message);
         return null;
       })
     )),
@@ -296,23 +334,25 @@ async function agentFetcher(tavilyKey) {
     }))
   ]);
 
-  const portcast = {};
+  const portcast = {}, maritimeOptima = {};
   PORTS.forEach((port, i) => {
     portcast[port.id] = portcastList[i];
+    maritimeOptima[port.id] = maritimeList[i];
   });
 
   return {
-    goComet, portcast, portResults,
+    goComet, portcast, maritimeOptima, portResults,
     counts: {
       gocomet: goComet ? PORTS.filter(p => goComet[p.id]).length : 0,
       portcast: portcastList.filter(Boolean).length,
+      maritimeoptima: maritimeList.filter(Boolean).length,
       searches: portResults.filter(r => !r.error).length
     }
   };
 }
 
 async function agentAnalyst(openrouterKey, model, fetched) {
-  const prompt = buildAnalystPrompt(fetched.portResults, fetched.goComet, fetched.portcast);
+  const prompt = buildAnalystPrompt(fetched.portResults, fetched.goComet, fetched.portcast, fetched.maritimeOptima);
   return openRouterComplete(openrouterKey, model, prompt,
     'You are a careful maritime data analyst. You write concise plain-text notes in exactly the requested shape. No JSON, no markdown.');
 }
@@ -346,7 +386,7 @@ async function runSync({ tavilyKey, openrouterKey, model, emit }) {
   send({ agent: 'fetcher', status: 'running' });
   const fetched = await agentFetcher(tavilyKey);
   const c = fetched.counts;
-  send({ agent: 'fetcher', status: 'done', detail: `GoComet ${c.gocomet}/9 · Portcast ${c.portcast}/9 · ${c.searches} searches` });
+  send({ agent: 'fetcher', status: 'done', detail: `GoComet ${c.gocomet}/9 · Portcast ${c.portcast}/9 · Maritime Optima ${c.maritimeoptima}/9 · ${c.searches} searches` });
 
   send({ agent: 'analyst', status: 'running' });
   const analysis = await agentAnalyst(openrouterKey, model || DEFAULT_MODEL, fetched);
@@ -358,14 +398,14 @@ async function runSync({ tavilyKey, openrouterKey, model, emit }) {
 
   // Enforce the provider numbers deterministically — the agents write the
   // prose, but the headline wait (average of both providers when they
-  // disagree) and the vessels-waiting count come straight from the scraped data.
+  // disagree) and the ships-in-port count come straight from the scraped data.
   for (const u of updates) {
     if (!u || !u.id) continue;
-    const prov = compareProviders(fetched.goComet && fetched.goComet[u.id], fetched.portcast[u.id]);
+    const prov = compareProviders(fetched.goComet && fetched.goComet[u.id], fetched.portcast[u.id], fetched.maritimeOptima[u.id]);
     if (!prov) continue;
     u.providers = prov;
     if (prov.avgDays !== null) u.waitH = Math.max(1, Math.round(prov.avgDays * 24));
-    if (prov.portcast && prov.portcast.vessels !== null) u.vessels = prov.portcast.vessels;
+    if (prov.maritimeoptima) u.vessels = prov.maritimeoptima.shipsInPort;
   }
 
   return { updates, syncedAt: new Date().toISOString() };
