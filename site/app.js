@@ -203,7 +203,7 @@
     const kpis = [
       { label: 'Ports tracked', value: '9', sub: 'across 6 regions', color: '#0f1b2d' },
       { label: 'Elevated (High +)', value: String(elevated), sub: 'of 9 ports', color: '#c2410c' },
-      { label: 'Ships in port', value: String(totalVessels), sub: 'across 9 ports, live AIS', color: '#0f1b2d' },
+      { label: 'Vessels waiting', value: String(totalVessels), sub: 'across 9 ports, avg per day at anchorage', color: '#0f1b2d' },
       { label: 'Avg waiting time', value: avgWait + 'h', sub: 'across ports', color: '#0f1b2d' },
       { label: 'Articles scanned', value: '64', sub: '17 cited', color: accent }
     ];
@@ -415,9 +415,8 @@
     } else if (prov && (prov.gocomet || prov.portcast)) {
       provNote = `<div style="font-size:10px;color:#9aa3ae;margin-top:6px;">${prov.gocomet ? 'GoComet' : 'Portcast'} data only</div>`;
     }
-    const vf = prov && prov.vesselfinder ? prov.vesselfinder : null;
-    const vesselNote = vf && vf.shipsInPort !== null
-      ? `<div style="font-size:10px;color:#9aa3ae;margin-top:6px;">per VesselFinder, all vessel types (live AIS)${vf.expected30d !== null ? ' · ' + esc(vf.expected30d) + ' expected 30d' : ''}</div>` : '';
+    const vesselNote = prov && prov.portcast && prov.portcast.vessels !== null
+      ? `<div style="font-size:10px;color:#9aa3ae;margin-top:6px;">per Portcast, avg per day at anchorage</div>` : '';
     const headerStyle = `padding:18px;background:${L.header};`;
     const berthBarStyle = `height:100%;width:${sel.berth}%;background:${sel.dotColor};border-radius:5px;`;
     const dqStyle = `background:#f6f8fa;border:1px solid #eef1f4;border-left:3px solid ${sel.dotColor};border-radius:9px;padding:11px 13px;`;
@@ -426,17 +425,13 @@
       port: sel.name, locode: sel.locode, country: sel.country,
       coordinates: { lat: sel.lat, lng: sel.lng },
       congestion_level: sel.level,
-      ships_in_port: sel.vessels,
+      vessels_waiting: sel.vessels,
       avg_waiting_time_hours: sel.waitH,
       ...(prov ? { wait_days_by_source: {
         gocomet: prov.gocomet ? prov.gocomet.days : null,
         portcast: prov.portcast ? prov.portcast.days : null,
         average: prov.avgDays,
         sources_agree: prov.agree
-      } } : {}),
-      ...(prov && prov.vesselfinder ? { vesselfinder_activity: {
-        ships_in_port_all_types: prov.vesselfinder.shipsInPort,
-        expected_arrivals_30d: prov.vesselfinder.expected30d
       } } : {}),
       berth_utilization_pct: sel.berth,
       delay_trend: sel.trend,
@@ -478,7 +473,7 @@
       <div style="padding:18px;">
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:11px;margin-bottom:16px;">
           <div style="border:1px solid #eef1f4;border-radius:10px;padding:12px 13px;">
-            <div style="font-size:11px;color:#7a8593;margin-bottom:6px;">Ships in port</div>
+            <div style="font-size:11px;color:#7a8593;margin-bottom:6px;">Vessels waiting</div>
             <div style="font-family:'Schibsted Grotesk',sans-serif;font-weight:700;font-size:24px;line-height:1;">${sel.vessels}</div>
             ${vesselNote}
           </div>

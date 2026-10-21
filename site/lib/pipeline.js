@@ -2,7 +2,7 @@
 // serverless functions in api/.
 //
 // Three agents run in sequence:
-//   1. fetcher — gathers live provider data (GoComet, Portcast, VesselFinder)
+//   1. fetcher — gathers live provider data (GoComet, Portcast)
 //      and Tavily search snippets. Pure I/O, no LLM.
 //   2. analyst — LLM pass that reads the fetched data and writes plain-text
 //      analyst notes per port (levels, trends, summaries, cited sources).
@@ -26,11 +26,9 @@ const PORTS = [
 ];
 
 // Data sources (for now): GoComet's public real-time tracker, Portcast's
-// per-port pages, and VesselFinder's per-port AIS pages (structured numbers
-// scraped from each) + Tavily search restricted to the domains below for
+// per-port pages (structured numbers scraped from each) + Tavily search restricted to the domains below for
 // qualitative context.
-const DATA_DOMAINS = ['gocomet.com', 'portcast.io', 'vesselfinder.com'];
-const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+const DATA_DOMAINS = ['gocomet.com', 'portcast.io'];
 const GOCOMET_URL = 'https://www.gocomet.com/real-time-port-congestion';
 
 async function fetchGoComet() {
@@ -85,39 +83,19 @@ async function fetchPortcast(port) {
   throw new Error('Portcast page layout changed — congestion Dataset not found');
 }
 
-// VesselFinder per-port pages (LOCODE + '001') show live AIS counts: ships
-// currently in the port area and arrivals expected over the next 30 days.
-// These cover ALL vessel types port-wide — the ships-in-port figure, not a
-// waiting-time signal.
-async function fetchVesselFinder(port) {
-  const url = `https://www.vesselfinder.com/ports/${port.id}001`;
-  const res = await fetch(url, { headers: { 'User-Agent': BROWSER_UA } });
-  if (!res.ok) throw new Error(`VesselFinder ${res.status}`);
-  const html = await res.text();
-  const exp = html.match(/Expected ships:<\/span>\s*<strong>([\d,]+)/);
-  const inp = html.match(/Ships in port:<\/span>\s*<strong>([\d,]+)/);
-  if (!exp && !inp) throw new Error('VesselFinder page layout changed — ship counts not found');
-  return {
-    url,
-    shipsInPort: inp ? parseInt(inp[1].replace(/,/g, ''), 10) : null,
-    expected30d: exp ? parseInt(exp[1].replace(/,/g, ''), 10) : null
-  };
-}
-
 // Deterministic cross-check of the two waiting-time providers, both measured
 // in days. "agree" within half a day; otherwise the headline figure is their
-// average. VesselFinder supplies the ships-in-port count.
-function compareProviders(gcEntry, pc, vf) {
+// average.
+function compareProviders(gcEntry, pc) {
   const gcDays = gcEntry && gcEntry.port && Number.isFinite(+gcEntry.port.delay) ? +gcEntry.port.delay : null;
   const pcDays = pc && Number.isFinite(pc.waitDays) ? pc.waitDays : null;
-  if (gcDays === null && pcDays === null && !vf) return null;
+  if (gcDays === null && pcDays === null) return null;
   const both = gcDays !== null && pcDays !== null;
   const any = gcDays !== null || pcDays !== null;
   const avgDays = both ? (gcDays + pcDays) / 2 : (gcDays !== null ? gcDays : pcDays);
   return {
     gocomet: gcDays === null ? null : { days: gcDays, level: gcEntry.port.delayLevel },
     portcast: pcDays === null ? null : { days: pcDays, level: pc.category, vessels: pc.vessels, changePct: pc.changePct },
-    vesselfinder: vf ? { shipsInPort: vf.shipsInPort, expected30d: vf.expected30d } : null,
     agree: both ? Math.abs(gcDays - pcDays) <= 0.5 : null,
     avgDays: any ? Math.round(avgDays * 100) / 100 : null
   };
@@ -160,19 +138,9 @@ function portcastBlock(pc) {
   ].join('\n');
 }
 
-function vesselFinderBlock(vf) {
-  if (!vf) return 'VESSELFINDER LIVE DATA: not available for this port.';
-  return [
-    'VESSELFINDER LIVE DATA (AIS counts, ALL vessel types across the whole port area — not the container anchorage queue):',
-    `- ships in port right now: ${vf.shipsInPort === null ? 'n/a' : vf.shipsInPort}`,
-    `- ships expected to arrive within 30 days: ${vf.expected30d === null ? 'n/a' : vf.expected30d}`,
-    `- source url: ${vf.url}`
-  ].join('\n');
-}
-
-function buildDataBlocks(portResults, goComet, portcast, vesselFinder) {
+function buildDataBlocks(portResults, goComet, portcast) {
   return portResults.map(({ port, data, error }) => {
-    const live = goCometBlock(goComet && goComet[port.id]) + '\n\n' + portcastBlock(portcast[port.id]) + '\n\n' + vesselFinderBlock(vesselFinder[port.id]);
+    const live = goCometBlock(goComet && goComet[port.id]) + '\n\n' + portcastBlock(portcast[port.id]);
     let search;
     if (error) {
       search = `Search failed (${error}).`;
@@ -189,16 +157,16 @@ function buildDataBlocks(portResults, goComet, portcast, vesselFinder) {
 
 // Agent 2 — "Analyst": reads the fetched data, decides every value, and
 // writes plain-text notes per port. It does NOT produce JSON.
-function buildAnalystPrompt(portResults, goComet, portcast, vesselFinder) {
+function buildAnalystPrompt(portResults, goComet, portcast) {
   const ids = portResults.map(r => r.port.id).join(', ');
-  const blocks = buildDataBlocks(portResults, goComet, portcast, vesselFinder);
+  const blocks = buildDataBlocks(portResults, goComet, portcast);
 
   return `You are the ANALYST agent in a three-agent pipeline (fetcher → analyst → JSON writer). The fetcher agent gathered the live provider data and search snippets below. Analyze current conditions and write concise plain-text analyst notes — one block per port, covering all of these port codes in this order: ${ids}.
 
 Write each block in exactly this shape (plain text, NO JSON, no markdown):
 PORT <code>
 level: <low|moderate|high|severe>
-vessels: <integer, ships in port right now — copy VesselFinder's ships-in-port count exactly; if VesselFinder has no data, estimate and lower conf>
+vessels: <integer, vessels waiting at anchorage — copy Portcast's average vessels waiting per day exactly; if Portcast has no figure, estimate and lower conf>
 waitH: <integer, average waiting time in hours>
 berth: <integer 0-100, berth utilization percent>
 trend: <improving|stable|worsening>
@@ -212,13 +180,12 @@ sources:
 Rules for using the live provider data, when present for a port:
 - CROSS-CHECK the two providers: GoComet's current vessel delay vs Portcast's median waiting time this week (both in days). If both are present, waitH = the AVERAGE of the two, converted to hours and rounded. If only one is present, use that one.
 - In dataQuality, state both providers' figures and whether they agree, e.g. "GoComet reports 2 days vs Portcast 0.1 days — figures diverge; headline wait is the average of both." If they are within half a day of each other, say they agree.
-- vessels: comes ONLY from VesselFinder's ships-in-port count (live AIS, all vessel types) — never from Portcast or GoComet. If VesselFinder has no data for the port, estimate from context and say so in dataQuality.
+- vessels: comes ONLY from Portcast's average vessels waiting per day at anchorage. If Portcast has no figure for the port, estimate from context and say so in dataQuality.
 - level: weigh both providers' categories (map "medium" → "moderate"); if they disagree, pick the middle ground; use "severe" only if delays run 7 days or more.
 - trend: use Portcast's week-over-week change and GoComet's weekly vs monthly medians — improving if falling, worsening if rising, else stable.
 - conf: "high" when both providers have data and roughly agree; "medium" when they diverge strongly or only one provider has data; "low" when neither does.
 - Cite BOTH providers as sources when both have data — outlet "GoComet" (url "${GOCOMET_URL}") and outlet "Portcast" (its "source url" above), each with its own signal like "2-day vessel delay" / "0.1-day median wait".
-- VesselFinder counts cover ALL ship types across the whole port area — they supply the "vessels" figure but are NOT a congestion or waiting-time signal: never let a big ship count alone raise the level or waitH. Cite VesselFinder (outlet "VesselFinder", its "source url" above) when you use its counts.
-- berth is NOT directly in the provider data — estimate it plausibly (VesselFinder activity may inform this) and note in dataQuality that it is an estimate.
+- berth is NOT directly in the provider data — estimate it plausibly and note in dataQuality that it is an estimate.
 If neither provider has data for a port, fall back to the search snippets and mark confidence "low".
 If snippets are sparse or contradictory, make a reasonable best-effort estimate and lower confidence rather than omitting a port.
 
@@ -308,7 +275,7 @@ function extractJsonArray(text) {
 }
 
 async function agentFetcher(tavilyKey) {
-  const [goComet, portcastList, vesselFinderList, portResults] = await Promise.all([
+  const [goComet, portcastList, portResults] = await Promise.all([
     fetchGoComet().catch(e => {
       console.warn('GoComet fetch failed, continuing without it:', e.message);
       return null;
@@ -316,12 +283,6 @@ async function agentFetcher(tavilyKey) {
     Promise.all(PORTS.map(port =>
       fetchPortcast(port).catch(e => {
         console.warn(`Portcast fetch failed for ${port.id}, continuing without it:`, e.message);
-        return null;
-      })
-    )),
-    Promise.all(PORTS.map(port =>
-      fetchVesselFinder(port).catch(e => {
-        console.warn(`VesselFinder fetch failed for ${port.id}, continuing without it:`, e.message);
         return null;
       })
     )),
@@ -335,25 +296,23 @@ async function agentFetcher(tavilyKey) {
     }))
   ]);
 
-  const portcast = {}, vesselFinder = {};
+  const portcast = {};
   PORTS.forEach((port, i) => {
     portcast[port.id] = portcastList[i];
-    vesselFinder[port.id] = vesselFinderList[i];
   });
 
   return {
-    goComet, portcast, vesselFinder, portResults,
+    goComet, portcast, portResults,
     counts: {
       gocomet: goComet ? PORTS.filter(p => goComet[p.id]).length : 0,
       portcast: portcastList.filter(Boolean).length,
-      vesselfinder: vesselFinderList.filter(Boolean).length,
       searches: portResults.filter(r => !r.error).length
     }
   };
 }
 
 async function agentAnalyst(openrouterKey, model, fetched) {
-  const prompt = buildAnalystPrompt(fetched.portResults, fetched.goComet, fetched.portcast, fetched.vesselFinder);
+  const prompt = buildAnalystPrompt(fetched.portResults, fetched.goComet, fetched.portcast);
   return openRouterComplete(openrouterKey, model, prompt,
     'You are a careful maritime data analyst. You write concise plain-text notes in exactly the requested shape. No JSON, no markdown.');
 }
@@ -387,7 +346,7 @@ async function runSync({ tavilyKey, openrouterKey, model, emit }) {
   send({ agent: 'fetcher', status: 'running' });
   const fetched = await agentFetcher(tavilyKey);
   const c = fetched.counts;
-  send({ agent: 'fetcher', status: 'done', detail: `GoComet ${c.gocomet}/9 · Portcast ${c.portcast}/9 · VesselFinder ${c.vesselfinder}/9 · ${c.searches} searches` });
+  send({ agent: 'fetcher', status: 'done', detail: `GoComet ${c.gocomet}/9 · Portcast ${c.portcast}/9 · ${c.searches} searches` });
 
   send({ agent: 'analyst', status: 'running' });
   const analysis = await agentAnalyst(openrouterKey, model || DEFAULT_MODEL, fetched);
@@ -399,14 +358,14 @@ async function runSync({ tavilyKey, openrouterKey, model, emit }) {
 
   // Enforce the provider numbers deterministically — the agents write the
   // prose, but the headline wait (average of both providers when they
-  // disagree) and the ships-in-port count come straight from the scraped data.
+  // disagree) and the vessels-waiting count come straight from the scraped data.
   for (const u of updates) {
     if (!u || !u.id) continue;
-    const prov = compareProviders(fetched.goComet && fetched.goComet[u.id], fetched.portcast[u.id], fetched.vesselFinder[u.id]);
+    const prov = compareProviders(fetched.goComet && fetched.goComet[u.id], fetched.portcast[u.id]);
     if (!prov) continue;
     u.providers = prov;
     if (prov.avgDays !== null) u.waitH = Math.max(1, Math.round(prov.avgDays * 24));
-    if (prov.vesselfinder && prov.vesselfinder.shipsInPort !== null) u.vessels = prov.vesselfinder.shipsInPort;
+    if (prov.portcast && prov.portcast.vessels !== null) u.vessels = prov.portcast.vessels;
   }
 
   return { updates, syncedAt: new Date().toISOString() };
